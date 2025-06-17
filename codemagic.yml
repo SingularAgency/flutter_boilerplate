@@ -1,0 +1,194 @@
+definitions:
+  enviroment:
+    flutter: 3.24.3
+    groups: 
+      - shorebird
+      - 1password
+      - firebase
+      - gradle
+      - java
+    android_signing: 
+      - {ANDROID_SIGNING_KEY}
+    ios_signing:
+      distribution_type: app_store 
+      bundle_identifier: {BUNDLE_IDENTIFIER}
+  scripts:
+    - &install_1password
+      name: Install and signin 1Password
+      script: |
+        brew install 1password-cli
+        op user get --me
+    - &generate_env_dev
+      name: Generate ENV dev file
+      script: |
+        # Create api-keys.dev.json
+        op inject -i env_development.tpl -o api-keys.dev.json
+    - &generate_env_prod
+      name: Generate ENV prod file
+      script: |
+        # Create api-keys.prod.json
+        op inject -i env_production.tpl -o api-keys.prod.json
+    - &setup_gradle
+      name: Setup Gradle
+      script: |
+        echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+    - &setup_firebase_android
+      name: Setup Firebase ANDROID
+      script: |
+        # Generate google-services.json
+        echo $ANDROID_FIREBASE_JSON | base64 --decode > $CM_BUILD_DIR/android/app/google-services.json
+
+        # Generate firebase_options.dart
+        echo $FIREBASE_OPTIONS | base64 --decode > $CM_BUILD_DIR/lib/firebase_options.dart
+    - &setup_firebase_ios
+      name: Setup Firebase IOS
+      script: |
+        echo $IOS_FIREBASE_APP_ID_JSON | base64 --decode > $CM_BUILD_DIR/ios/firebase_app_id_file.json
+        echo $IOS_FIREBASE_JSON | base64 --decode > $CM_BUILD_DIR/ios/Runner/GoogleService-Info.plist
+        echo $FIREBASE_OPTIONS | base64 --decode > $CM_BUILD_DIR/lib/firebase_options.dart
+    - &install_shorebird
+      name: Install Shorebird
+      script: |
+          # Install Shorebird
+          curl --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/shorebirdtech/install/main/install.sh -sSf | bash
+
+          # Add Shorebird to PATH
+          echo PATH="$HOME/.shorebird/bin:$PATH" >> $CM_ENV
+    - &build_generated_files
+      name: Build generated files 
+      script: |
+        flutter pub run build_runner build --delete-conflicting-outputs
+workflows:
+  android-production:
+    name: Android Production
+    environment:
+      flutter: 3.24.3
+      groups: 
+        - shorebird
+        - 1password
+        - firebase
+        - gradle
+        - google_play
+        - java
+      android_signing: 
+        - {ANDROID_SIGNING_KEY}
+    scripts:
+      - *install_1password
+      - *generate_env_prod
+      - *setup_gradle
+      - *setup_firebase_android
+      - *install_shorebird
+      - name: Install dependencies android
+        script: |
+          flutter clean
+          flutter pub get
+      - *build_generated_files
+      - name: Build
+        script: |
+          yes | shorebird release android --flutter-version=3.24.3 --target ./lib/main_production.dart --verbose -- --dart-define-from-file api-keys.prod.json --flavor production --no-tree-shake-icons
+    artifacts:
+      - build/**/outputs/**/*.aab
+      - build/**/outputs/**/*.apk
+      - /Users/builder/Library/Application Support/shorebird/logs/*.log
+    publishing:
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT_CREDENTIALS
+        track: internal
+        submit_as_draft: true
+  ios-production:
+    name: iOS Production
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      flutter: 3.24.3
+      groups: 
+        - shorebird
+        - 1password
+        - firebase
+        - java
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: {BUNDLE_IDENTIFIER}
+    scripts:
+      - keychain initialize
+      - keychain add-certificates
+      - xcode-project use-profiles
+      - *install_1password
+      - *generate_env_prod
+      - *setup_firebase_ios
+      - *install_shorebird
+      - name: Install dependencies ios
+        script: |
+          flutter clean
+          flutter pub get
+          # find . -name "Podfile" -execdir pod install \;
+      - *build_generated_files
+      - name: Build
+        script: |
+          yes | shorebird release ios --flutter-version=3.24.3 --flavor production --target ./lib/main_production.dart --verbose -- --flavor production --dart-define-from-file api-keys.prod.json --export-options-plist=/Users/builder/export_options.plist --no-tree-shake-icons
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - Users/builder/Library/Application Support/shorebird/logs/
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        submit_to_app_store: false
+  ios-production-patch:
+    name: iOS Production Patch
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      flutter: 3.24.3
+      groups: 
+        - shorebird
+        - 1password
+        - firebase
+        - java
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: {BUNDLE_IDENTIFIER}
+    scripts:
+      - keychain initialize
+      - keychain add-certificates
+      - xcode-project use-profiles
+      - *install_1password
+      - *generate_env_prod
+      - *setup_firebase_ios
+      - *install_shorebird
+      - name: Install dependencies ios
+        script: |
+          flutter clean
+          flutter pub get
+          # find . -name "Podfile" -execdir pod install \;
+      - *build_generated_files
+      - name: Build
+        script: |
+          yes | shorebird patch ios --flavor production --target ./lib/main_production.dart --release-version 4.3.0+309 -- --flavor production --dart-define-from-file api-keys.prod.json --export-options-plist=/Users/builder/export_options.plist --no-tree-shake-icons
+  android-production-patch:
+    name: Android Production
+    environment:
+      flutter: 3.24.3
+      groups: 
+        - shorebird
+        - 1password
+        - firebase
+        - gradle
+        - google_play
+        - java
+      android_signing: 
+        - {ANDROID_SIGNING_KEY}
+    scripts:
+      - *install_1password
+      - *generate_env_prod
+      - *setup_gradle
+      - *setup_firebase_android
+      - *install_shorebird
+      - name: Install dependencies android
+        script: |
+          flutter clean
+          flutter pub get
+      - *build_generated_files
+      - name: Build
+        script: |
+          yes | shorebird patch android --target ./lib/main_production.dart --release-version 4.3.0+309 -- --dart-define-from-file api-keys.prod.json --flavor production --no-tree-shake-icons
